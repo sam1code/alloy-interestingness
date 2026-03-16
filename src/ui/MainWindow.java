@@ -238,6 +238,7 @@ public class MainWindow extends JFrame {
 
                 @Override
                 protected Void doInBackground() {
+                	long start = System.currentTimeMillis();
                     try {
                         Command command = loader.getCommand(
                             loadedModule, commandIndex);
@@ -246,6 +247,8 @@ public class MainWindow extends JFrame {
                     } catch (Exception ex) {
                         errorMessage = ex.getMessage();
                     }
+                    long end = System.currentTimeMillis();
+                    System.out.println("Time: " + (end - start) + " ms");
                     return null;
                 }
 
