@@ -1,19 +1,16 @@
 package core;
 
 public class Config {
+
     private final String modelPath;
-    private final int commandIndex;
+    private final int cmdIndex;
 
-    public Config(String modelPath, int commandIndex) {
+    public Config(String modelPath, int cmdIndex) {
         this.modelPath = modelPath;
-        this.commandIndex = commandIndex;
+        this.cmdIndex = cmdIndex;
     }
 
-    public String getModelPath() {
-        return modelPath;
-    }
+    public String getModelPath() { return modelPath; }
 
-    public int getCommandIndex() {
-        return commandIndex;
-    }
+    public int getCommandIndex() { return cmdIndex; }
 }

@@ -13,91 +13,61 @@ import edu.mit.csail.sdg.translator.TranslateAlloyToKodkod;
 
 public class ScopeRunner {
 
-    public static class ScopeResult {
+    public static class Result {
         public final int scope;
         public final A4Solution solution;
         public final int score;
 
-        public ScopeResult(int scope, A4Solution solution, int score) {
+        public Result(int scope, A4Solution solution, int score) {
             this.scope = scope;
             this.solution = solution;
             this.score = score;
         }
     }
 
-    private final TupleCounter counter = new TupleCounter();
+    private final Counter counter = new Counter();
 
-    // Instead of overriding the Alloy scope (which causes errors),
-    // we use scope as the number of solutions to check per round.
-    // Round 1: check 1 solution
-    // Round 2: check 2 solutions
-    // Round 3: check 3 solutions ... up to maxScope
-    // This grows the search budget gradually — memory safe.
-    public List<ScopeResult> runAcrossScopes(
-            CompModule module,
-            Command command,
-            int minScope,
-            int maxScope,
-            String strategy) throws Err {
+    // grows search budget gradually: round N checks N solutions, tracks best per level
+    public List<Result> run(CompModule module, Command cmd,
+            int minScope, int maxScope, String strategy) throws Err {
+        List<Result> results = new ArrayList<>();
 
-        List<ScopeResult> results = new ArrayList<>();
-
-        A4Reporter reporter = new A4Reporter();
-        A4Options options = new A4Options();
-
-        // Run the solver once
         A4Solution first = TranslateAlloyToKodkod.execute_command(
-            reporter,
-            module.getAllReachableSigs(),
-            command,
-            options
-        );
+            new A4Reporter(), module.getAllReachableSigs(), cmd, new A4Options());
 
         if (!first.satisfiable()) {
             System.out.println("No solutions found at all.");
             return results;
         }
 
-        // Walk through solutions, keeping track of best at each scope level
-        A4Solution current = first;
-        int totalChecked = 0;
-        int currentScope = minScope;
+        A4Solution cur = first;
+        int checked = 0;
+        int curScope = minScope;
+        A4Solution bestSol = null;
+        int bestScore = strategy.contains("Minimal") ? Integer.MAX_VALUE : Integer.MIN_VALUE;
 
-        A4Solution bestSoFar = null;
-        int bestScoreSoFar = strategy.contains("Minimal")
-            ? Integer.MAX_VALUE : Integer.MIN_VALUE;
+        while (cur.satisfiable() && curScope <= maxScope) {
+            int score = counter.countUserTuples(cur);
+            checked++;
 
-        while (current.satisfiable() && currentScope <= maxScope) {
-            int score = counter.countUserTuples(current);
-            totalChecked++;
-
-            // Track best for this strategy
             boolean better = false;
-            if (strategy.contains("Minimal") && score < bestScoreSoFar) {
-                better = true;
-            } else if (strategy.contains("Maximal") && score > bestScoreSoFar) {
-                better = true;
-            } else if (strategy.contains("Diverse")) {
-                better = true; // always take new one for diverse
+            if (strategy.contains("Minimal") && score < bestScore) better = true;
+            else if (strategy.contains("Maximal") && score > bestScore) better = true;
+            else if (strategy.contains("Diverse")) better = true;
+
+            if (better || bestSol == null) {
+                bestScore = score;
+                bestSol = cur;
             }
 
-            if (better || bestSoFar == null) {
-                bestScoreSoFar = score;
-                bestSoFar = current;
+            if (checked >= curScope && curScope >= minScope) { // checkpoint
+                System.out.println("Scope level " + curScope + ": checked "
+                    + checked + " solutions, best score=" + bestScore);
+                results.add(new Result(curScope, bestSol, bestScore));
+                curScope++;
             }
-
-            // Every time we hit a scope checkpoint, record best so far
-            if (totalChecked >= currentScope && currentScope >= minScope) {
-                System.out.println("Scope level " + currentScope
-                    + ": checked " + totalChecked
-                    + " solutions, best score=" + bestScoreSoFar);
-                results.add(new ScopeResult(currentScope, bestSoFar, bestScoreSoFar));
-                currentScope++;
-            }
-
-            current = current.next();
+            cur = cur.next();
         }
-
         return results;
     }
 }

@@ -2,10 +2,10 @@ package core;
 
 import java.util.List;
 
-import alloy.AlloyModelLoader;
-import alloy.AlloyRunner;
-import alloy.CommandInfo;
-import alloy.TupleCounter;
+import alloy.ModelLoader;
+import alloy.Runner;
+import alloy.CmdInfo;
+import alloy.Counter;
 import edu.mit.csail.sdg.alloy4.Err;
 import edu.mit.csail.sdg.ast.Command;
 import edu.mit.csail.sdg.parser.CompModule;
@@ -15,55 +15,44 @@ public class Main {
 
     public static void main(String[] args) {
         try {
-            Config config = new Config("models/graph.als", 0);
+            Config cfg = new Config("models/graph.als", 0);
+            ModelLoader loader = new ModelLoader();
+            Runner runner = new Runner();
+            Counter counter = new Counter();
 
-            AlloyModelLoader loader = new AlloyModelLoader();
-            AlloyRunner runner = new AlloyRunner();
-            TupleCounter counter = new TupleCounter();
-
-            CompModule module = loader.loadModel(config.getModelPath());
+            CompModule module = loader.load(cfg.getModelPath());
 
             System.out.println("=== MODEL LOADED ===");
-            System.out.println("File: " + config.getModelPath());
+            System.out.println("File: " + cfg.getModelPath());
 
-            List<CommandInfo> commands = loader.listCommands(module);
+            List<CmdInfo> cmds = loader.listCommands(module);
             System.out.println("\n=== COMMANDS FOUND ===");
-            for (CommandInfo info : commands) {
-                System.out.println(info);
-            }
+            for (CmdInfo c : cmds) System.out.println(c);
 
-            Command command = loader.getCommand(module, config.getCommandIndex());
-
+            Command cmd = loader.getCommand(module, cfg.getCommandIndex());
             System.out.println("\n=== EXECUTING COMMAND ===");
-            System.out.println(command);
+            System.out.println(cmd);
 
-            List<A4Solution> solutions = runner.enumerateSolutions(module, command, 50);
+            List<A4Solution> sols = runner.enumerate(module, cmd, 50);
 
             System.out.println("\n=== ALL INSTANCES ===");
-            for (int i = 0; i < solutions.size(); i++) {
-                counter.printSummary(solutions.get(i), i + 1);
-            }
+            for (int i = 0; i < sols.size(); i++)
+                counter.printSummary(sols.get(i), i + 1);
 
-            // Find smallest and largest
-            int minScore = Integer.MAX_VALUE;
-            int maxScore = Integer.MIN_VALUE;
-            int minIndex = 0;
-            int maxIndex = 0;
-
-            for (int i = 0; i < solutions.size(); i++) {
-                int score = counter.countUserTuples(solutions.get(i));
-                if (score < minScore) { minScore = score; minIndex = i; }
-                if (score > maxScore) { maxScore = score; maxIndex = i; }
+            int minScore = Integer.MAX_VALUE, maxScore = Integer.MIN_VALUE;
+            int minIdx = 0, maxIdx = 0;
+            for (int i = 0; i < sols.size(); i++) {
+                int sc = counter.countUserTuples(sols.get(i));
+                if (sc < minScore) { minScore = sc; minIdx = i; }
+                if (sc > maxScore) { maxScore = sc; maxIdx = i; }
             }
 
             System.out.println("\n=== MOST INTERESTING ===");
-            System.out.println("Smallest instance (index " + (minIndex+1) + ", score=" + minScore + "):");
-            counter.printSummary(solutions.get(minIndex), minIndex + 1);
-
-            System.out.println("Largest instance (index " + (maxIndex+1) + ", score=" + maxScore + "):");
-            counter.printSummary(solutions.get(maxIndex), maxIndex + 1);
-
-            System.out.println("\nTotal solutions found: " + solutions.size());
+            System.out.println("Smallest instance (index " + (minIdx+1) + ", score=" + minScore + "):");
+            counter.printSummary(sols.get(minIdx), minIdx + 1);
+            System.out.println("Largest instance (index " + (maxIdx+1) + ", score=" + maxScore + "):");
+            counter.printSummary(sols.get(maxIdx), maxIdx + 1);
+            System.out.println("\nTotal solutions found: " + sols.size());
 
         } catch (Err e) {
             System.err.println("Alloy error: " + e.getMessage());

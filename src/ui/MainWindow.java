@@ -2,27 +2,25 @@ package ui;
 
 import java.awt.*;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import javax.swing.*;
 import javax.swing.table.*;
 
-import alloy.AlloyModelLoader;
-import alloy.AlloyRunner;
-import alloy.CommandInfo;
-import alloy.DiversitySelector;
-import alloy.MemorySafeDiversityRunner;
+import alloy.ModelLoader;
+import alloy.Runner;
+import alloy.CmdInfo;
+import alloy.DivPicker;
+import alloy.StreamDivRunner;
 import alloy.ScopeRunner;
-import alloy.TupleCounter;
-import alloy.WeightConfig;
+import alloy.Counter;
+import alloy.Weights;
 import edu.mit.csail.sdg.alloy4.Err;
 import edu.mit.csail.sdg.ast.Command;
 import edu.mit.csail.sdg.ast.Sig;
 import edu.mit.csail.sdg.ast.Sig.Field;
 import edu.mit.csail.sdg.parser.CompModule;
-import edu.mit.csail.sdg.translator.A4Options;
 import edu.mit.csail.sdg.alloy4.A4Reporter;
+import edu.mit.csail.sdg.translator.A4Options;
 import edu.mit.csail.sdg.translator.A4Solution;
 import edu.mit.csail.sdg.translator.A4Tuple;
 import edu.mit.csail.sdg.translator.A4TupleSet;
@@ -32,26 +30,25 @@ public class MainWindow extends JFrame {
 
     private static final long serialVersionUID = 1L;
 
-    private JLabel fileLabel;
-    private JComboBox<String> commandDropdown;
-    private JComboBox<String> strategyDropdown;
-    private JButton runButton;
-    private JPanel resultsPanel;
-    private JCheckBox scopeGrowingCheck;
-    private JSpinner minScopeSpinner;
-    private JSpinner maxScopeSpinner;
+    private JLabel fileLbl;
+    private JComboBox<String> cmdBox;
+    private JComboBox<String> stratBox;
+    private JButton runBtn;
+    private JPanel resPanel;
+    private JCheckBox scopeChk;
+    private JSpinner minSpin;
+    private JSpinner maxSpin;
 
-    private CompModule loadedModule = null;
-    private List<A4Solution> lastSolutions = null;
-    private WeightConfig weightConfig = new WeightConfig();
+    private CompModule module = null;
+    private List<A4Solution> lastSols = null;
+    private Weights weights = new Weights();
 
-    private final AlloyModelLoader loader = new AlloyModelLoader();
-    private final AlloyRunner runner = new AlloyRunner();
-    private final TupleCounter counter = new TupleCounter();
-    private final DiversitySelector diversitySelector = new DiversitySelector();
+    private final ModelLoader loader = new ModelLoader();
+    private final Runner runner = new Runner();
+    private final Counter counter = new Counter();
+    private final DivPicker divPicker = new DivPicker();
     private final ScopeRunner scopeRunner = new ScopeRunner();
-    private final MemorySafeDiversityRunner memorySafeRunner =
-        new MemorySafeDiversityRunner();
+    private final StreamDivRunner streamDiv = new StreamDivRunner();
 
     public MainWindow() {
         setTitle("Alloy Interestingness Explorer");
@@ -61,17 +58,13 @@ public class MainWindow extends JFrame {
         setLocationRelativeTo(null);
         setLayout(new BorderLayout(0, 0));
 
-        // Main tabbed pane
         JTabbedPane tabs = new JTabbedPane();
 
-        // Tab 1: Explorer
-        JPanel explorerTab = new JPanel(new BorderLayout());
-        explorerTab.add(buildTopPanel(), BorderLayout.NORTH);
-        explorerTab.add(buildResultsPanel(), BorderLayout.CENTER);
-        tabs.addTab("Explorer", explorerTab);
-
-        // Tab 2: Evaluation
-        tabs.addTab("Evaluation", new EvaluationPanel());
+        JPanel expTab = new JPanel(new BorderLayout());
+        expTab.add(buildTopPanel(), BorderLayout.NORTH);
+        expTab.add(buildResPanel(), BorderLayout.CENTER);
+        tabs.addTab("Explorer", expTab);
+        tabs.addTab("Evaluation", new EvalPanel());
 
         add(tabs, BorderLayout.CENTER);
     }
@@ -81,59 +74,56 @@ public class MainWindow extends JFrame {
         outer.setLayout(new BoxLayout(outer, BoxLayout.Y_AXIS));
         outer.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
-        // Row 1: file + weights button
         JPanel row1 = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        JButton browseButton = new JButton("Browse .als file");
-        fileLabel = new JLabel("No file selected");
-        fileLabel.setForeground(Color.GRAY);
-        browseButton.addActionListener(e -> onBrowse());
+        JButton browseBtn = new JButton("Browse .als file");
+        fileLbl = new JLabel("No file selected");
+        fileLbl.setForeground(Color.GRAY);
+        browseBtn.addActionListener(e -> onBrowse());
 
-        JButton weightsButton = new JButton("Set Weights");
-        weightsButton.addActionListener(e -> onSetWeights());
+        JButton wBtn = new JButton("Set Weights");
+        wBtn.addActionListener(e -> onSetWeights());
 
-        row1.add(browseButton);
-        row1.add(fileLabel);
+        row1.add(browseBtn);
+        row1.add(fileLbl);
         row1.add(Box.createHorizontalStrut(20));
-        row1.add(weightsButton);
+        row1.add(wBtn);
 
-        // Row 2: command + strategy + run
         JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        commandDropdown = new JComboBox<>();
-        commandDropdown.setPreferredSize(new Dimension(280, 28));
+        cmdBox = new JComboBox<>();
+        cmdBox.setPreferredSize(new Dimension(280, 28));
 
-        strategyDropdown = new JComboBox<>();
-        strategyDropdown.addItem("Minimal (fewest tuples)");
-        strategyDropdown.addItem("Maximal (most tuples)");
-        strategyDropdown.addItem("Diverse");
-        strategyDropdown.addItem("Diverse (memory-safe)");
-        strategyDropdown.setPreferredSize(new Dimension(220, 28));
+        stratBox = new JComboBox<>();
+        stratBox.addItem("Minimal (fewest tuples)");
+        stratBox.addItem("Maximal (most tuples)");
+        stratBox.addItem("Diverse");
+        stratBox.addItem("Diverse (memory-safe)");
+        stratBox.setPreferredSize(new Dimension(220, 28));
 
-        runButton = new JButton("Run");
-        runButton.setPreferredSize(new Dimension(80, 28));
-        runButton.setEnabled(false);
-        runButton.addActionListener(e -> onRun());
+        runBtn = new JButton("Run");
+        runBtn.setPreferredSize(new Dimension(80, 28));
+        runBtn.setEnabled(false);
+        runBtn.addActionListener(e -> onRun());
 
         row2.add(new JLabel("Command:"));
-        row2.add(commandDropdown);
+        row2.add(cmdBox);
         row2.add(Box.createHorizontalStrut(10));
         row2.add(new JLabel("Strategy:"));
-        row2.add(strategyDropdown);
+        row2.add(stratBox);
         row2.add(Box.createHorizontalStrut(10));
-        row2.add(runButton);
+        row2.add(runBtn);
 
-        // Row 3: scope growing
         JPanel row3 = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        scopeGrowingCheck = new JCheckBox("Scope Growing");
-        minScopeSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 20, 1));
-        minScopeSpinner.setPreferredSize(new Dimension(55, 28));
-        maxScopeSpinner = new JSpinner(new SpinnerNumberModel(5, 1, 20, 1));
-        maxScopeSpinner.setPreferredSize(new Dimension(55, 28));
+        scopeChk = new JCheckBox("Scope Growing");
+        minSpin = new JSpinner(new SpinnerNumberModel(1, 1, 20, 1));
+        minSpin.setPreferredSize(new Dimension(55, 28));
+        maxSpin = new JSpinner(new SpinnerNumberModel(5, 1, 20, 1));
+        maxSpin.setPreferredSize(new Dimension(55, 28));
 
-        row3.add(scopeGrowingCheck);
+        row3.add(scopeChk);
         row3.add(new JLabel("Min scope:"));
-        row3.add(minScopeSpinner);
+        row3.add(minSpin);
         row3.add(new JLabel("Max scope:"));
-        row3.add(maxScopeSpinner);
+        row3.add(maxSpin);
 
         outer.add(row1);
         outer.add(Box.createVerticalStrut(8));
@@ -143,596 +133,450 @@ public class MainWindow extends JFrame {
         return outer;
     }
 
-    private JPanel buildResultsPanel() {
-        resultsPanel = new JPanel(new BorderLayout());
-        resultsPanel.setBorder(BorderFactory.createTitledBorder("Results"));
-        JLabel placeholder = new JLabel(
-            "Load a .als file and press Run to see results.",
-            SwingConstants.CENTER
-        );
-        placeholder.setForeground(Color.GRAY);
-        resultsPanel.add(placeholder, BorderLayout.CENTER);
-        return resultsPanel;
+    private JPanel buildResPanel() {
+        resPanel = new JPanel(new BorderLayout());
+        resPanel.setBorder(BorderFactory.createTitledBorder("Results"));
+        JLabel ph = new JLabel("Load a .als file and press Run to see results.", SwingConstants.CENTER);
+        ph.setForeground(Color.GRAY);
+        resPanel.add(ph, BorderLayout.CENTER);
+        return resPanel;
     }
 
     private void onBrowse() {
-        JFileChooser chooser = new JFileChooser();
-        int result = chooser.showOpenDialog(this);
-        if (result != JFileChooser.APPROVE_OPTION) return;
+        JFileChooser fc = new JFileChooser();
+        if (fc.showOpenDialog(this) != JFileChooser.APPROVE_OPTION)
+            return;
 
-        String path = chooser.getSelectedFile().getAbsolutePath();
-        fileLabel.setText(chooser.getSelectedFile().getName());
-        fileLabel.setForeground(Color.BLACK);
+        String path = fc.getSelectedFile().getAbsolutePath();
+        fileLbl.setText(fc.getSelectedFile().getName());
+        fileLbl.setForeground(Color.BLACK);
 
         try {
-            loadedModule = loader.loadModel(path);
-            List<CommandInfo> commands = loader.listCommands(loadedModule);
-            commandDropdown.removeAllItems();
-            for (CommandInfo cmd : commands) {
-                commandDropdown.addItem(cmd.getDescription());
-            }
-            weightConfig.reset();
-            runButton.setEnabled(true);
-            showMessage("Model loaded. " + commands.size() + " command(s) found.");
+            module = loader.load(path);
+            List<CmdInfo> cmds = loader.listCommands(module);
+            cmdBox.removeAllItems();
+            for (CmdInfo c : cmds)
+                cmdBox.addItem(c.getDescription());
+            weights.reset();
+            runBtn.setEnabled(true);
+            showMsg("Model loaded. " + cmds.size() + " command(s) found.");
         } catch (Err ex) {
-            showError("Failed to load model: " + ex.getMessage());
+            showErr("Failed to load model: " + ex.getMessage());
         }
     }
 
     private void onSetWeights() {
-        if (loadedModule == null) {
-            JOptionPane.showMessageDialog(this,
-                "Please load a .als file first.");
+        if (module == null) {
+            JOptionPane.showMessageDialog(this, "Please load a .als file first.");
             return;
         }
-
-        // Get sig names from first solution
         try {
-            Command command = loader.getCommand(loadedModule,
-                commandDropdown.getSelectedIndex());
-            A4Reporter rep = new A4Reporter();
-            A4Options opts = new A4Options();
+            // need a quick solve just to discover available sig names
+            Command cmd = loader.getCommand(module, cmdBox.getSelectedIndex());
             A4Solution sol = TranslateAlloyToKodkod.execute_command(
-                rep, loadedModule.getAllReachableSigs(), command, opts);
-
+                    new A4Reporter(), module.getAllReachableSigs(), cmd, new A4Options());
             if (!sol.satisfiable()) {
                 JOptionPane.showMessageDialog(this, "No solution found to get sigs from.");
                 return;
             }
-
             List<String> sigNames = getUserSigNames(sol);
-            WeightDialog dialog = new WeightDialog(this, sigNames, weightConfig);
-            dialog.setVisible(true);
-
-            if (dialog.isConfirmed()) {
+            WeightDlg dlg = new WeightDlg(this, sigNames, weights);
+            dlg.setVisible(true);
+            if (dlg.isConfirmed()) {
                 StringBuilder sb = new StringBuilder("Weights set: ");
-                for (String s : sigNames) {
-                    sb.append(s).append("=")
-                      .append(weightConfig.getWeight(s)).append(" ");
-                }
-                showMessage(sb.toString());
+                for (String s : sigNames)
+                    sb.append(s).append("=").append(weights.get(s)).append(" ");
+                showMsg(sb.toString());
             }
-
         } catch (Exception ex) {
-            showError("Error getting sigs: " + ex.getMessage());
+            showErr("Error getting sigs: " + ex.getMessage());
         }
     }
 
     private void onRun() {
-        if (loadedModule == null) return;
+        if (module == null)
+            return;
+        int cmdIdx = cmdBox.getSelectedIndex();
+        String strat = (String) stratBox.getSelectedItem();
+        boolean useScope = scopeChk.isSelected();
 
-        int commandIndex = commandDropdown.getSelectedIndex();
-        String strategy = (String) strategyDropdown.getSelectedItem();
-        boolean useScopeGrowing = scopeGrowingCheck.isSelected();
+        showMsg("Running... please wait.");
+        runBtn.setEnabled(false);
 
-        showMessage("Running... please wait.");
-        runButton.setEnabled(false);
+        if (useScope) {
+            int lo = (int) minSpin.getValue();
+            int hi = (int) maxSpin.getValue();
 
-        if (useScopeGrowing) {
-            int minScope = (int) minScopeSpinner.getValue();
-            int maxScope = (int) maxScopeSpinner.getValue();
-
-            SwingWorker<Void, Void> worker = new SwingWorker<>() {
-                List<ScopeRunner.ScopeResult> scopeResults;
-                String errorMessage;
+            SwingWorker<Void, Void> w = new SwingWorker<>() {
+                List<ScopeRunner.Result> scopeRes;
+                String err;
 
                 @Override
                 protected Void doInBackground() {
-                	long start = System.currentTimeMillis();
+                    long t0 = System.currentTimeMillis();
                     try {
-                        Command command = loader.getCommand(
-                            loadedModule, commandIndex);
-                        scopeResults = scopeRunner.runAcrossScopes(
-                            loadedModule, command, minScope, maxScope, strategy);
+                        Command cmd = loader.getCommand(module, cmdIdx);
+                        scopeRes = scopeRunner.run(module, cmd, lo, hi, strat);
                     } catch (Exception ex) {
-                        errorMessage = ex.getMessage();
+                        err = ex.getMessage();
                     }
-                    long end = System.currentTimeMillis();
-                    System.out.println("Time: " + (end - start) + " ms");
+                    System.out.println("Time: " + (System.currentTimeMillis() - t0) + " ms");
                     return null;
                 }
 
                 @Override
                 protected void done() {
-                    runButton.setEnabled(true);
-                    if (errorMessage != null) {
-                        showError("Error: " + errorMessage);
+                    runBtn.setEnabled(true);
+                    if (err != null) {
+                        showErr("Error: " + err);
                         return;
                     }
-                    showScopeResults(scopeResults, strategy);
+                    showScopeResults(scopeRes, strat);
                 }
             };
-            worker.execute();
-
+            w.execute();
         } else {
-            SwingWorker<Void, Void> worker = new SwingWorker<>() {
-                List<A4Solution> solutions;
-                List<MemorySafeDiversityRunner.DiverseResult> diverseResults;
-                String errorMessage;
+            SwingWorker<Void, Void> w = new SwingWorker<>() {
+                List<A4Solution> sols;
+                List<StreamDivRunner.Result> divRes;
+                String err;
 
                 @Override
                 protected Void doInBackground() {
+                    long t0 = System.currentTimeMillis();
                     try {
-                        Command command = loader.getCommand(
-                            loadedModule, commandIndex);
-                        if (strategy.contains("memory-safe")) {
-                            diverseResults = memorySafeRunner.findDiverse(
-                                loadedModule, command, 10, 100);
-                        } else {
-                            solutions = runner.enumerateSolutions(
-                                loadedModule, command, 50);
-                        }
+                        Command cmd = loader.getCommand(module, cmdIdx);
+                        if (strat.contains("memory-safe"))
+                            divRes = streamDiv.findDiverse(module, cmd, 10, 100);
+                        else
+                            sols = runner.enumerate(module, cmd, 50);
                     } catch (Exception ex) {
-                        errorMessage = ex.getMessage();
+                        err = ex.getMessage();
                     }
+                    // debug stats
+                    long t1 = System.currentTimeMillis();
+                    System.out.println("TIME: " + strat + " = " + (t1 - t0) + " ms");
+                    Runtime rt = Runtime.getRuntime();
+                    long mb = (rt.totalMemory() - rt.freeMemory()) / 1024 / 1024;
+                    System.out.println("MEMORY: " + strat + " = " + mb + " MB");
                     return null;
                 }
 
                 @Override
                 protected void done() {
-                    runButton.setEnabled(true);
-                    if (errorMessage != null) {
-                        showError("Error: " + errorMessage);
+                    runBtn.setEnabled(true);
+                    if (err != null) {
+                        showErr("Error: " + err);
                         return;
                     }
-                    if (strategy.contains("memory-safe")) {
-                        showMemorySafeResults(diverseResults);
-                    } else {
-                        lastSolutions = solutions;
-                        showResults(solutions, strategy);
+                    if (strat.contains("memory-safe"))
+                        showStreamResults(divRes);
+                    else {
+                        lastSols = sols;
+                        showResults(sols, strat);
                     }
                 }
             };
-            worker.execute();
+            w.execute();
         }
     }
 
-    // -------------------------------------------------------
-    // Normal results
-    // -------------------------------------------------------
-    private void showResults(List<A4Solution> solutions, String strategy) {
-        resultsPanel.removeAll();
-        resultsPanel.setBorder(BorderFactory.createTitledBorder("Results"));
+    private void showResults(List<A4Solution> sols, String strat) {
+        resPanel.removeAll();
+        resPanel.setBorder(BorderFactory.createTitledBorder("Results"));
 
-        if (solutions.isEmpty()) {
-            resultsPanel.add(new JLabel("No solutions found.",
-                SwingConstants.CENTER));
-            resultsPanel.revalidate();
-            resultsPanel.repaint();
+        if (sols.isEmpty()) {
+            resPanel.add(new JLabel("No solutions found.", SwingConstants.CENTER));
+            resPanel.revalidate();
+            resPanel.repaint();
             return;
         }
 
-        if (strategy.contains("Diverse")) {
-            solutions = diversitySelector.selectDiverse(
-                solutions, solutions.size());
-        }
+        if (strat.contains("Diverse"))
+            sols = divPicker.selectDiverse(sols, sols.size());
 
-        List<String> sigNames = getUserSigNames(solutions.get(0));
-        boolean isDiverse = strategy.contains("Diverse");
-        int extraCols = isDiverse ? 2 : 1;
-        int totalCols = 2 + sigNames.size() + extraCols;
+        List<String> sigNames = getUserSigNames(sols.get(0));
+        boolean isDiv = strat.contains("Diverse");
+        int extra = isDiv ? 2 : 1; // diverse adds a Div.Score column
+        int cols = 2 + sigNames.size() + extra;
 
-        String[] columns = new String[totalCols];
-        columns[0] = "#";
-        columns[1] = "Score";
-        for (int i = 0; i < sigNames.size(); i++) {
-            columns[2 + i] = sigNames.get(i);
-        }
-        if (isDiverse) columns[totalCols - 2] = "Div.Score";
-        columns[totalCols - 1] = "View";
+        String[] hdr = new String[cols];
+        hdr[0] = "#";
+        hdr[1] = "Score";
+        for (int i = 0; i < sigNames.size(); i++)
+            hdr[2 + i] = sigNames.get(i);
+        if (isDiv)
+            hdr[cols - 2] = "Div.Score";
+        hdr[cols - 1] = "View";
 
-        Object[][] data = new Object[solutions.size()][totalCols];
-        for (int i = 0; i < solutions.size(); i++) {
-            A4Solution sol = solutions.get(i);
+        Object[][] data = new Object[sols.size()][cols];
+        for (int i = 0; i < sols.size(); i++) {
+            A4Solution s = sols.get(i);
             data[i][0] = i + 1;
-            data[i][1] = counter.countUserTuples(sol, weightConfig);
-            for (int j = 0; j < sigNames.size(); j++) {
-                data[i][2 + j] = getSigCount(sol, sigNames.get(j));
-            }
-            if (isDiverse) {
-                data[i][totalCols - 2] = i == 0 ? "-"
-                    : diversitySelector.symmetricDifference(
-                        solutions.get(i - 1), sol);
-            }
-            data[i][totalCols - 1] = "View";
+            data[i][1] = counter.countUserTuples(s, weights);
+            for (int j = 0; j < sigNames.size(); j++)
+                data[i][2 + j] = getSigCount(s, sigNames.get(j));
+            if (isDiv)
+                data[i][cols - 2] = i == 0 ? "-" : divPicker.symDiff(sols.get(i - 1), s);
+            data[i][cols - 1] = "View";
         }
 
-        if (!isDiverse) sortData(data, strategy);
-
-        buildAndShowTable(solutions, data, columns, totalCols,
-            solutions.size() + " solutions found. Strategy: " + strategy);
+        if (!isDiv)
+            sortData(data, strat);
+        buildTable(sols, data, hdr, cols, sols.size() + " solutions found. Strategy: " + strat);
     }
 
-    // -------------------------------------------------------
-    // Scope growing results
-    // -------------------------------------------------------
-    private void showScopeResults(List<ScopeRunner.ScopeResult> scopeResults,
-                                   String strategy) {
-        resultsPanel.removeAll();
-        resultsPanel.setBorder(BorderFactory.createTitledBorder(
-            "Results — Scope Growing"));
+    private void showScopeResults(List<ScopeRunner.Result> res, String strat) {
+        resPanel.removeAll();
+        resPanel.setBorder(BorderFactory.createTitledBorder("Results — Scope Growing"));
 
-        if (scopeResults.isEmpty()) {
-            resultsPanel.add(new JLabel(
-                "No solutions found across any scope.",
-                SwingConstants.CENTER));
-            resultsPanel.revalidate();
-            resultsPanel.repaint();
+        if (res.isEmpty()) {
+            resPanel.add(new JLabel("No solutions found across any scope.", SwingConstants.CENTER));
+            resPanel.revalidate();
+            resPanel.repaint();
             return;
         }
 
-        List<String> sigNames = getUserSigNames(scopeResults.get(0).solution);
-        int totalCols = 3 + sigNames.size() + 1;
+        List<String> sigNames = getUserSigNames(res.get(0).solution);
+        int cols = 3 + sigNames.size() + 1;
 
-        String[] columns = new String[totalCols];
-        columns[0] = "#";
-        columns[1] = "Scope";
-        columns[2] = "Score";
-        for (int i = 0; i < sigNames.size(); i++) {
-            columns[3 + i] = sigNames.get(i);
-        }
-        columns[totalCols - 1] = "View";
+        String[] hdr = new String[cols];
+        hdr[0] = "#";
+        hdr[1] = "Scope";
+        hdr[2] = "Score";
+        for (int i = 0; i < sigNames.size(); i++)
+            hdr[3 + i] = sigNames.get(i);
+        hdr[cols - 1] = "View";
 
-        Object[][] data = new Object[scopeResults.size()][totalCols];
-        List<A4Solution> solutions = new ArrayList<>();
-
-        for (int i = 0; i < scopeResults.size(); i++) {
-            ScopeRunner.ScopeResult r = scopeResults.get(i);
-            solutions.add(r.solution);
+        Object[][] data = new Object[res.size()][cols];
+        List<A4Solution> sols = new ArrayList<>();
+        for (int i = 0; i < res.size(); i++) {
+            ScopeRunner.Result r = res.get(i);
+            sols.add(r.solution);
             data[i][0] = i + 1;
             data[i][1] = r.scope;
             data[i][2] = r.score;
-            for (int j = 0; j < sigNames.size(); j++) {
+            for (int j = 0; j < sigNames.size(); j++)
                 data[i][3 + j] = getSigCount(r.solution, sigNames.get(j));
-            }
-            data[i][totalCols - 1] = "View";
+            data[i][cols - 1] = "View";
         }
 
-        buildAndShowTable(solutions, data, columns, totalCols,
-            scopeResults.size() + " scope levels searched. Strategy: "
-            + strategy);
+        buildTable(sols, data, hdr, cols,
+                res.size() + " scope levels searched. Strategy: " + strat);
     }
 
-    // -------------------------------------------------------
-    // Memory-safe diverse results
-    // -------------------------------------------------------
-    private void showMemorySafeResults(
-            List<MemorySafeDiversityRunner.DiverseResult> results) {
+    private void showStreamResults(List<StreamDivRunner.Result> res) {
+        resPanel.removeAll();
+        resPanel.setBorder(BorderFactory.createTitledBorder("Results — Diverse (Memory-Safe)"));
 
-        resultsPanel.removeAll();
-        resultsPanel.setBorder(BorderFactory.createTitledBorder(
-            "Results — Diverse (Memory-Safe)"));
-
-        if (results.isEmpty()) {
-            resultsPanel.add(new JLabel("No diverse solutions found.",
-                SwingConstants.CENTER));
-            resultsPanel.revalidate();
-            resultsPanel.repaint();
+        if (res.isEmpty()) {
+            resPanel.add(new JLabel("No diverse solutions found.", SwingConstants.CENTER));
+            resPanel.revalidate();
+            resPanel.repaint();
             return;
         }
 
-        List<String> sigNames = getUserSigNames(results.get(0).solution);
-        int totalCols = 2 + sigNames.size() + 2;
+        List<String> sigNames = getUserSigNames(res.get(0).solution);
+        int cols = 2 + sigNames.size() + 2;
 
-        String[] columns = new String[totalCols];
-        columns[0] = "#";
-        columns[1] = "Score";
-        for (int i = 0; i < sigNames.size(); i++) {
-            columns[2 + i] = sigNames.get(i);
-        }
-        columns[totalCols - 2] = "Div.Score";
-        columns[totalCols - 1] = "View";
+        String[] hdr = new String[cols];
+        hdr[0] = "#";
+        hdr[1] = "Score";
+        for (int i = 0; i < sigNames.size(); i++)
+            hdr[2 + i] = sigNames.get(i);
+        hdr[cols - 2] = "Div.Score";
+        hdr[cols - 1] = "View";
 
-        Object[][] data = new Object[results.size()][totalCols];
-        List<A4Solution> solutions = new ArrayList<>();
-
-        for (int i = 0; i < results.size(); i++) {
-            MemorySafeDiversityRunner.DiverseResult r = results.get(i);
-            solutions.add(r.solution);
+        Object[][] data = new Object[res.size()][cols];
+        List<A4Solution> sols = new ArrayList<>();
+        for (int i = 0; i < res.size(); i++) {
+            StreamDivRunner.Result r = res.get(i);
+            sols.add(r.solution);
             data[i][0] = i + 1;
             data[i][1] = r.score;
-            for (int j = 0; j < sigNames.size(); j++) {
+            for (int j = 0; j < sigNames.size(); j++)
                 data[i][2 + j] = getSigCount(r.solution, sigNames.get(j));
-            }
-            data[i][totalCols - 2] = i == 0 ? "-" : r.diversityFromPrevious;
-            data[i][totalCols - 1] = "View";
+            data[i][cols - 2] = i == 0 ? "-" : r.divFromPrev;
+            data[i][cols - 1] = "View";
         }
 
-        buildAndShowTable(solutions, data, columns, totalCols,
-            results.size() + " diverse instances found (memory-safe).");
+        buildTable(sols, data, hdr, cols,
+                res.size() + " diverse instances found (memory-safe).");
     }
 
-    // -------------------------------------------------------
-    // Shared table builder
-    // -------------------------------------------------------
-    private void buildAndShowTable(List<A4Solution> solutions,
-                                    Object[][] data,
-                                    String[] columns,
-                                    int totalCols,
-                                    String summaryText) {
-        DefaultTableModel model = new DefaultTableModel(data, columns) {
+    private void buildTable(List<A4Solution> sols, Object[][] data,
+            String[] hdr, int cols, String summary) {
+        DefaultTableModel model = new DefaultTableModel(data, hdr) {
             @Override
             public boolean isCellEditable(int row, int col) {
-                return col == totalCols - 1;
+                return col == cols - 1;
             }
         };
 
-        JTable table = new JTable(model);
-        table.setRowHeight(30);
-        table.setFont(new Font("Monospaced", Font.PLAIN, 13));
-        table.getTableHeader().setFont(new Font("SansSerif", Font.BOLD, 13));
+        JTable tbl = new JTable(model);
+        tbl.setRowHeight(30);
+        tbl.setFont(new Font("Monospaced", Font.PLAIN, 13));
+        tbl.getTableHeader().setFont(new Font("SansSerif", Font.BOLD, 13));
+        tbl.getColumn("View").setCellRenderer(new BtnRenderer());
+        tbl.getColumn("View").setCellEditor(new BtnEditor(sols));
+        tbl.getColumn("View").setMaxWidth(80);
 
-        table.getColumn("View").setCellRenderer(new ButtonRenderer());
-        table.getColumn("View").setCellEditor(new ButtonEditor(solutions));
-        table.getColumn("View").setMaxWidth(80);
-
-        JScrollPane scrollPane = new JScrollPane(table);
-        resultsPanel.add(scrollPane, BorderLayout.CENTER);
-
-        JLabel summary = new JLabel("  " + summaryText);
-        summary.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
-        resultsPanel.add(summary, BorderLayout.SOUTH);
-
-        resultsPanel.revalidate();
-        resultsPanel.repaint();
+        resPanel.add(new JScrollPane(tbl), BorderLayout.CENTER);
+        JLabel lbl = new JLabel("  " + summary);
+        lbl.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+        resPanel.add(lbl, BorderLayout.SOUTH);
+        resPanel.revalidate();
+        resPanel.repaint();
     }
 
-    // -------------------------------------------------------
-    // Detail window with graph + text + find similar/different
-    // -------------------------------------------------------
-    private void openDetailWindow(A4Solution solution, int instanceNumber) {
-        JDialog dialog = new JDialog(this, "Instance " + instanceNumber, false);
-        dialog.setSize(900, 560);
-        dialog.setLocationRelativeTo(this);
-        dialog.setLayout(new BorderLayout());
+    private void openDetail(A4Solution sol, int num) {
+        JDialog dlg = new JDialog(this, "Instance " + num, false);
+        dlg.setSize(900, 560);
+        dlg.setLocationRelativeTo(this);
+        dlg.setLayout(new BorderLayout());
 
-        // Graph panel
-        GraphPanel graphPanel = new GraphPanel();
-        graphPanel.loadSolution(solution);
-        graphPanel.setBorder(BorderFactory.createTitledBorder("Graph"));
+        GraphPanel gp = new GraphPanel();
+        gp.loadSolution(sol);
+        gp.setBorder(BorderFactory.createTitledBorder("Graph"));
 
-        // Text panel
-        JTextArea text = new JTextArea();
-        text.setFont(new Font("Monospaced", Font.PLAIN, 12));
-        text.setEditable(false);
-        text.setText(buildDetailText(solution, instanceNumber));
+        JTextArea txt = new JTextArea();
+        txt.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        txt.setEditable(false);
+        txt.setText(detailText(sol, num));
 
-        JScrollPane textScroll = new JScrollPane(text);
-        textScroll.setBorder(BorderFactory.createTitledBorder("Details"));
-        textScroll.setPreferredSize(new Dimension(280, 500));
+        JScrollPane txtScroll = new JScrollPane(txt);
+        txtScroll.setBorder(BorderFactory.createTitledBorder("Details"));
+        txtScroll.setPreferredSize(new Dimension(280, 500));
 
-        JSplitPane splitPane = new JSplitPane(
-            JSplitPane.HORIZONTAL_SPLIT, graphPanel, textScroll);
-        splitPane.setDividerLocation(580);
-        splitPane.setResizeWeight(0.7);
+        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, gp, txtScroll);
+        split.setDividerLocation(580);
+        split.setResizeWeight(0.7);
 
-        // Bottom buttons: Find Similar / Find Different
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 15, 8));
+        JPanel btns = new JPanel(new FlowLayout(FlowLayout.CENTER, 15, 8));
 
-        JButton similarBtn = new JButton("Find Similar");
-        similarBtn.setToolTipText(
-            "Find instances structurally similar to this one");
-        similarBtn.addActionListener(e -> {
-            dialog.dispose();
-            findSimilarTo(solution);
+        JButton simBtn = new JButton("Find Similar");
+        simBtn.setToolTipText("Find instances structurally similar to this one");
+        simBtn.addActionListener(e -> {
+            dlg.dispose();
+            findRelated(sol, true);
         });
 
-        JButton differentBtn = new JButton("Find Different");
-        differentBtn.setToolTipText(
-            "Find instances structurally different from this one");
-        differentBtn.addActionListener(e -> {
-            dialog.dispose();
-            findDifferentFrom(solution);
+        JButton diffBtn = new JButton("Find Different");
+        diffBtn.setToolTipText("Find instances structurally different from this one");
+        diffBtn.addActionListener(e -> {
+            dlg.dispose();
+            findRelated(sol, false);
         });
 
-        buttonPanel.add(similarBtn);
-        buttonPanel.add(differentBtn);
+        btns.add(simBtn);
+        btns.add(diffBtn);
 
-        dialog.add(splitPane, BorderLayout.CENTER);
-        dialog.add(buttonPanel, BorderLayout.SOUTH);
-        dialog.setVisible(true);
+        dlg.add(split, BorderLayout.CENTER);
+        dlg.add(btns, BorderLayout.SOUTH);
+        dlg.setVisible(true);
     }
 
-    // Find instances similar to a reference solution
-    private void findSimilarTo(A4Solution reference) {
-        if (loadedModule == null) return;
+    private void findRelated(A4Solution ref, boolean similar) {
+        if (module == null)
+            return;
+        int cmdIdx = cmdBox.getSelectedIndex();
+        showMsg("Finding " + (similar ? "similar" : "different") + " instances... please wait.");
+        runBtn.setEnabled(false);
 
-        int commandIndex = commandDropdown.getSelectedIndex();
-        showMessage("Finding similar instances... please wait.");
-        runButton.setEnabled(false);
-
-        SwingWorker<Void, Void> worker = new SwingWorker<>() {
-            List<A4Solution> results;
-            String errorMessage;
+        SwingWorker<Void, Void> w = new SwingWorker<>() {
+            List<A4Solution> res;
+            String err;
 
             @Override
             protected Void doInBackground() {
                 try {
-                    Command command = loader.getCommand(
-                        loadedModule, commandIndex);
-                    List<A4Solution> all = runner.enumerateSolutions(
-                        loadedModule, command, 50);
-
-                    // Sort by similarity to reference (ascending diff = most similar)
-                    results = new ArrayList<>(all);
-                    results.sort((a, b) -> {
-                        int dA = diversitySelector.symmetricDifference(
-                            reference, a);
-                        int dB = diversitySelector.symmetricDifference(
-                            reference, b);
-                        return Integer.compare(dA, dB);
+                    Command cmd = loader.getCommand(module, cmdIdx);
+                    List<A4Solution> all = runner.enumerate(module, cmd, 50);
+                    res = new ArrayList<>(all);
+                    // ascending dist = most similar first, descending = most different
+                    res.sort((a, b) -> {
+                        int dA = divPicker.symDiff(ref, a);
+                        int dB = divPicker.symDiff(ref, b);
+                        return similar ? Integer.compare(dA, dB) : Integer.compare(dB, dA);
                     });
-
-                    // Keep top 10 most similar
-                    if (results.size() > 10) {
-                        results = results.subList(0, 10);
-                    }
+                    if (res.size() > 10)
+                        res = res.subList(0, 10); // top 10
                 } catch (Exception ex) {
-                    errorMessage = ex.getMessage();
+                    err = ex.getMessage();
                 }
                 return null;
             }
 
             @Override
             protected void done() {
-                runButton.setEnabled(true);
-                if (errorMessage != null) {
-                    showError("Error: " + errorMessage);
+                runBtn.setEnabled(true);
+                if (err != null) {
+                    showErr("Error: " + err);
                     return;
                 }
-                showSimilarResults(results, reference, "Similar");
+                showRelatedResults(res, ref, similar ? "Similar" : "Different");
             }
         };
-        worker.execute();
+        w.execute();
     }
 
-    // Find instances different from a reference solution
-    private void findDifferentFrom(A4Solution reference) {
-        if (loadedModule == null) return;
+    private void showRelatedResults(List<A4Solution> res, A4Solution ref, String mode) {
+        resPanel.removeAll();
+        resPanel.setBorder(BorderFactory.createTitledBorder("Results — Find " + mode));
 
-        int commandIndex = commandDropdown.getSelectedIndex();
-        showMessage("Finding different instances... please wait.");
-        runButton.setEnabled(false);
-
-        SwingWorker<Void, Void> worker = new SwingWorker<>() {
-            List<A4Solution> results;
-            String errorMessage;
-
-            @Override
-            protected Void doInBackground() {
-                try {
-                    Command command = loader.getCommand(
-                        loadedModule, commandIndex);
-                    List<A4Solution> all = runner.enumerateSolutions(
-                        loadedModule, command, 50);
-
-                    // Sort by difference from reference (descending diff = most different)
-                    results = new ArrayList<>(all);
-                    results.sort((a, b) -> {
-                        int dA = diversitySelector.symmetricDifference(
-                            reference, a);
-                        int dB = diversitySelector.symmetricDifference(
-                            reference, b);
-                        return Integer.compare(dB, dA);
-                    });
-
-                    // Keep top 10 most different
-                    if (results.size() > 10) {
-                        results = results.subList(0, 10);
-                    }
-                } catch (Exception ex) {
-                    errorMessage = ex.getMessage();
-                }
-                return null;
-            }
-
-            @Override
-            protected void done() {
-                runButton.setEnabled(true);
-                if (errorMessage != null) {
-                    showError("Error: " + errorMessage);
-                    return;
-                }
-                showSimilarResults(results, reference, "Different");
-            }
-        };
-        worker.execute();
-    }
-
-    // Show similar or different results with a "distance" column
-    private void showSimilarResults(List<A4Solution> results,
-                                     A4Solution reference,
-                                     String mode) {
-        resultsPanel.removeAll();
-        resultsPanel.setBorder(BorderFactory.createTitledBorder(
-            "Results — Find " + mode));
-
-        if (results.isEmpty()) {
-            resultsPanel.add(new JLabel("No results found.",
-                SwingConstants.CENTER));
-            resultsPanel.revalidate();
-            resultsPanel.repaint();
+        if (res.isEmpty()) {
+            resPanel.add(new JLabel("No results found.", SwingConstants.CENTER));
+            resPanel.revalidate();
+            resPanel.repaint();
             return;
         }
 
-        List<String> sigNames = getUserSigNames(results.get(0));
-        int totalCols = 2 + sigNames.size() + 2; // # | Score | sigs | Dist | View
+        List<String> sigNames = getUserSigNames(res.get(0));
+        int cols = 2 + sigNames.size() + 2;
 
-        String[] columns = new String[totalCols];
-        columns[0] = "#";
-        columns[1] = "Score";
-        for (int i = 0; i < sigNames.size(); i++) {
-            columns[2 + i] = sigNames.get(i);
-        }
-        columns[totalCols - 2] = "Distance";
-        columns[totalCols - 1] = "View";
+        String[] hdr = new String[cols];
+        hdr[0] = "#";
+        hdr[1] = "Score";
+        for (int i = 0; i < sigNames.size(); i++)
+            hdr[2 + i] = sigNames.get(i);
+        hdr[cols - 2] = "Distance";
+        hdr[cols - 1] = "View";
 
-        Object[][] data = new Object[results.size()][totalCols];
-        for (int i = 0; i < results.size(); i++) {
-            A4Solution sol = results.get(i);
+        Object[][] data = new Object[res.size()][cols];
+        for (int i = 0; i < res.size(); i++) {
+            A4Solution s = res.get(i);
             data[i][0] = i + 1;
-            data[i][1] = counter.countUserTuples(sol, weightConfig);
-            for (int j = 0; j < sigNames.size(); j++) {
-                data[i][2 + j] = getSigCount(sol, sigNames.get(j));
-            }
-            data[i][totalCols - 2] = diversitySelector.symmetricDifference(
-                reference, sol);
-            data[i][totalCols - 1] = "View";
+            data[i][1] = counter.countUserTuples(s, weights);
+            for (int j = 0; j < sigNames.size(); j++)
+                data[i][2 + j] = getSigCount(s, sigNames.get(j));
+            data[i][cols - 2] = divPicker.symDiff(ref, s);
+            data[i][cols - 1] = "View";
         }
 
-        buildAndShowTable(results, data, columns, totalCols,
-            results.size() + " instances found. Mode: Find " + mode);
+        buildTable(res, data, hdr, cols, res.size() + " instances found. Mode: Find " + mode);
     }
 
-    private String buildDetailText(A4Solution solution, int instanceNumber) {
+    private String detailText(A4Solution sol, int num) {
         StringBuilder sb = new StringBuilder();
-        sb.append("=== Instance ").append(instanceNumber).append(" ===\n\n");
-
+        sb.append("=== Instance ").append(num).append(" ===\n\n");
         try {
-            for (Sig sig : solution.getAllReachableSigs()) {
-                if (isBuiltIn(sig)) continue;
-
-                A4TupleSet sigSet = solution.eval(sig);
-                String sigName = sig.label.replace("this/", "");
-                int weight = weightConfig.getWeight(sigName);
-
-                sb.append("Sig ").append(sigName)
-                  .append(" (").append(sigSet.size()).append(" atoms")
-                  .append(", weight=").append(weight).append(")\n");
-
-                for (A4Tuple t : sigSet) {
+            for (Sig sig : sol.getAllReachableSigs()) {
+                if (builtIn(sig))
+                    continue;
+                A4TupleSet sigSet = sol.eval(sig);
+                String sn = sig.label.replace("this/", "");
+                sb.append("Sig ").append(sn).append(" (").append(sigSet.size())
+                        .append(" atoms, weight=").append(weights.get(sn)).append(")\n");
+                for (A4Tuple t : sigSet)
                     sb.append("  ").append(t.atom(0)).append("\n");
-                }
-
-                for (Field field : sig.getFields()) {
-                    A4TupleSet fieldSet = solution.eval(field);
-                    sb.append("  Field ").append(field.label)
-                      .append(" (").append(fieldSet.size())
-                      .append(" tuples)\n");
-                    for (A4Tuple t : fieldSet) {
+                for (Field f : sig.getFields()) {
+                    A4TupleSet fs = sol.eval(f);
+                    sb.append("  Field ").append(f.label).append(" (").append(fs.size()).append(" tuples)\n");
+                    for (A4Tuple t : fs) {
                         sb.append("    ");
                         for (int i = 0; i < t.arity(); i++) {
-                            if (i > 0) sb.append(" -> ");
+                            if (i > 0)
+                                sb.append(" -> ");
                             sb.append(t.atom(i));
                         }
                         sb.append("\n");
@@ -743,119 +587,108 @@ public class MainWindow extends JFrame {
         } catch (Exception e) {
             sb.append("Error: ").append(e.getMessage());
         }
-
-        sb.append("\nWeighted score: ")
-          .append(counter.countUserTuples(solution, weightConfig));
+        sb.append("\nWeighted score: ").append(counter.countUserTuples(sol, weights));
         return sb.toString();
     }
 
-    // -------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------
-    private List<String> getUserSigNames(A4Solution solution) {
+    private List<String> getUserSigNames(A4Solution sol) {
         List<String> names = new ArrayList<>();
-        for (Sig sig : solution.getAllReachableSigs()) {
-            if (isBuiltIn(sig)) continue;
+        for (Sig sig : sol.getAllReachableSigs()) {
+            if (builtIn(sig))
+                continue;
             names.add(sig.label.replace("this/", ""));
         }
         return names;
     }
 
-    private int getSigCount(A4Solution solution, String sigName) {
+    private int getSigCount(A4Solution sol, String name) {
         try {
-            for (Sig sig : solution.getAllReachableSigs()) {
-                if (sig.label.equals("this/" + sigName)) {
-                    return solution.eval(sig).size();
-                }
-            }
-        } catch (Exception e) { /* ignore */ }
+            for (Sig sig : sol.getAllReachableSigs())
+                if (sig.label.equals("this/" + name))
+                    return sol.eval(sig).size();
+        } catch (Exception e) {
+        }
         return 0;
     }
 
-    private boolean isBuiltIn(Sig sig) {
-        String name = sig.label;
-        return name.equals("univ") || name.equals("Int")
-            || name.equals("seq/Int") || name.equals("String")
-            || name.equals("none") || sig.builtin;
+    private boolean builtIn(Sig sig) {
+        String n = sig.label;
+        return n.equals("univ") || n.equals("Int") || n.equals("seq/Int")
+                || n.equals("String") || n.equals("none") || sig.builtin;
     }
 
-    private void sortData(Object[][] data, String strategy) {
+    private void sortData(Object[][] data, String strat) {
         java.util.Arrays.sort(data, (a, b) -> {
-            int scoreA = (int) a[1];
-            int scoreB = (int) b[1];
-            if (strategy.contains("Minimal"))
-                return Integer.compare(scoreA, scoreB);
-            if (strategy.contains("Maximal"))
-                return Integer.compare(scoreB, scoreA);
+            int sa = (int) a[1], sb = (int) b[1];
+            if (strat.contains("Minimal"))
+                return Integer.compare(sa, sb);
+            if (strat.contains("Maximal"))
+                return Integer.compare(sb, sa);
             return 0;
         });
     }
 
-    private void showMessage(String msg) {
-        resultsPanel.removeAll();
-        resultsPanel.setBorder(BorderFactory.createTitledBorder("Results"));
-        JLabel label = new JLabel(msg, SwingConstants.CENTER);
-        label.setForeground(Color.GRAY);
-        resultsPanel.add(label, BorderLayout.CENTER);
-        resultsPanel.revalidate();
-        resultsPanel.repaint();
+    private void showMsg(String msg) {
+        resPanel.removeAll();
+        resPanel.setBorder(BorderFactory.createTitledBorder("Results"));
+        JLabel lbl = new JLabel(msg, SwingConstants.CENTER);
+        lbl.setForeground(Color.GRAY);
+        resPanel.add(lbl, BorderLayout.CENTER);
+        resPanel.revalidate();
+        resPanel.repaint();
     }
 
-    private void showError(String msg) {
-        resultsPanel.removeAll();
-        resultsPanel.setBorder(BorderFactory.createTitledBorder("Results"));
-        JLabel label = new JLabel(msg, SwingConstants.CENTER);
-        label.setForeground(Color.RED);
-        resultsPanel.add(label, BorderLayout.CENTER);
-        resultsPanel.revalidate();
-        resultsPanel.repaint();
+    private void showErr(String msg) {
+        resPanel.removeAll();
+        resPanel.setBorder(BorderFactory.createTitledBorder("Results"));
+        JLabel lbl = new JLabel(msg, SwingConstants.CENTER);
+        lbl.setForeground(Color.RED);
+        resPanel.add(lbl, BorderLayout.CENTER);
+        resPanel.revalidate();
+        resPanel.repaint();
     }
 
-    // -------------------------------------------------------
-    // Button renderer and editor
-    // -------------------------------------------------------
-    class ButtonRenderer extends JButton implements TableCellRenderer {
-        public ButtonRenderer() { setOpaque(true); }
+    class BtnRenderer extends JButton implements TableCellRenderer {
+        BtnRenderer() {
+            setOpaque(true);
+        }
 
         @Override
-        public Component getTableCellRendererComponent(JTable table,
-                Object value, boolean isSelected, boolean hasFocus,
-                int row, int column) {
+        public Component getTableCellRendererComponent(JTable t, Object val,
+                boolean sel, boolean focus, int row, int col) {
             setText("View");
             return this;
         }
     }
 
-    class ButtonEditor extends DefaultCellEditor {
-        private final List<A4Solution> solutions;
-        private int clickedRow;
+    class BtnEditor extends DefaultCellEditor {
+        private final List<A4Solution> sols;
+        private int row;
 
-        public ButtonEditor(List<A4Solution> solutions) {
-            super(new JCheckBox());
-            this.solutions = solutions;
-            JButton button = new JButton("View");
-            button.addActionListener(e -> {
+        BtnEditor(List<A4Solution> sols) {
+            super(new JCheckBox()); // DefaultCellEditor needs a component; we replace it below
+            this.sols = sols;
+            JButton b = new JButton("View");
+            b.addActionListener(e -> {
                 fireEditingStopped();
-                openDetailWindow(solutions.get(clickedRow), clickedRow + 1);
+                openDetail(sols.get(row), row + 1);
             });
-            editorComponent = button;
+            editorComponent = b;
         }
 
         @Override
-        public Component getTableCellEditorComponent(JTable table,
-                Object value, boolean isSelected, int row, int column) {
-            clickedRow = (int) table.getValueAt(row, 0) - 1;
+        public Component getTableCellEditorComponent(JTable t, Object val, boolean sel, int r, int c) {
+            row = (int) t.getValueAt(r, 0) - 1;
             return editorComponent;
         }
 
         @Override
-        public Object getCellEditorValue() { return "View"; }
+        public Object getCellEditorValue() {
+            return "View";
+        }
     }
 
     public static void main(String[] args) {
-    	SwingUtilities.invokeLater(() -> {
-            MainWindow window = new MainWindow();
-            window.setVisible(true);
-        });
+        SwingUtilities.invokeLater(() -> new MainWindow().setVisible(true));
     }
 }

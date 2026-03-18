@@ -16,186 +16,117 @@ import edu.mit.csail.sdg.translator.A4TupleSet;
 
 public class Evaluator {
 
-    private final AlloyRunner runner = new AlloyRunner();
-    private final TupleCounter counter = new TupleCounter();
-    private final DiversitySelector diversitySelector = new DiversitySelector();
-    private final MemorySafeDiversityRunner memorySafeRunner =
-        new MemorySafeDiversityRunner();
+    private final Runner runner = new Runner();
+    private final Counter counter = new Counter();
+    private final DivPicker divPicker = new DivPicker();
+    private final StreamDivRunner streamDiv = new StreamDivRunner();
 
-    // Run all strategies and return one EvaluationResult per strategy
-    public List<EvaluationResult> evaluateAll(
-            CompModule module,
-            Command command) throws Err {
-
-        List<EvaluationResult> results = new ArrayList<>();
-
-        // Enumerate all solutions once
-        List<A4Solution> all = runner.enumerateSolutions(module, command, 50);
-
+    public List<EvalResult> evaluateAll(CompModule module, Command cmd) throws Err {
+        List<EvalResult> results = new ArrayList<>();
+        List<A4Solution> all = runner.enumerate(module, cmd, 50);
         if (all.isEmpty()) return results;
 
-        // Minimal
-        results.add(evaluate("Minimal",
-            getSorted(all, "Minimal"), all));
+        results.add(eval("Minimal", getSorted(all, "Minimal"), all));
+        results.add(eval("Maximal", getSorted(all, "Maximal"), all));
+        results.add(eval("Diverse (greedy)", divPicker.selectDiverse(all, all.size()), all));
 
-        // Maximal
-        results.add(evaluate("Maximal",
-            getSorted(all, "Maximal"), all));
-
-        // Diverse (greedy)
-        results.add(evaluate("Diverse (greedy)",
-            diversitySelector.selectDiverse(all, all.size()), all));
-
-        // Diverse (memory-safe)
         try {
-            List<MemorySafeDiversityRunner.DiverseResult> divResults =
-                memorySafeRunner.findDiverse(module, command, 10, 100);
-            List<A4Solution> divSolutions = new ArrayList<>();
-            for (MemorySafeDiversityRunner.DiverseResult r : divResults) {
-                divSolutions.add(r.solution);
-            }
-            results.add(evaluate("Diverse (memory-safe)", divSolutions, all));
+            List<StreamDivRunner.Result> divResults = streamDiv.findDiverse(module, cmd, 10, 100);
+            List<A4Solution> divSols = new ArrayList<>();
+            for (StreamDivRunner.Result r : divResults) divSols.add(r.solution);
+            results.add(eval("Diverse (memory-safe)", divSols, all));
         } catch (Exception e) {
             System.err.println("Memory-safe diverse failed: " + e.getMessage());
         }
-
         return results;
     }
 
-    // Evaluate a list of solutions produced by one strategy
-    private EvaluationResult evaluate(
-            String strategyName,
-            List<A4Solution> solutions,
-            List<A4Solution> allSolutions) {
+    private EvalResult eval(String name, List<A4Solution> sols, List<A4Solution> all) {
+        if (sols.isEmpty()) return new EvalResult(name, 0, 0, 0, 0, 0, 0);
 
-        if (solutions.isEmpty()) {
-            return new EvaluationResult(strategyName, 0, 0, 0, 0, 0, 0);
+        int min = Integer.MAX_VALUE, max = Integer.MIN_VALUE;
+        long total = 0;
+        for (A4Solution s : sols) {
+            int sc = counter.countUserTuples(s);
+            if (sc < min) min = sc;
+            if (sc > max) max = sc;
+            total += sc;
         }
-
-        int minScore = Integer.MAX_VALUE;
-        int maxScore = Integer.MIN_VALUE;
-        long totalScore = 0;
-
-        for (A4Solution sol : solutions) {
-            int score = counter.countUserTuples(sol);
-            if (score < minScore) minScore = score;
-            if (score > maxScore) maxScore = score;
-            totalScore += score;
-        }
-
-        double avgScore = (double) totalScore / solutions.size();
-
-        // Average pairwise diversity
-        double avgDiversity = computeAverageDiversity(solutions);
-
-        // Count distinct structures
-        int distinct = countDistinctStructures(solutions);
-
-        return new EvaluationResult(
-            strategyName,
-            solutions.size(),
-            minScore,
-            maxScore,
-            avgScore,
-            avgDiversity,
-            distinct
-        );
+        double avg = (double) total / sols.size();
+        double avgDiv = avgDiversity(sols);
+        int distinct = countDistinct(sols);
+        return new EvalResult(name, sols.size(), min, max, avg, avgDiv, distinct);
     }
 
-    // Average pairwise symmetric difference
-    private double computeAverageDiversity(List<A4Solution> solutions) {
-        if (solutions.size() < 2) return 0;
-
+    // O(n^2) pairwise — fine for <=50 solutions
+    private double avgDiversity(List<A4Solution> sols) {
+        if (sols.size() < 2) return 0;
         long total = 0;
         int pairs = 0;
-
-        for (int i = 0; i < solutions.size(); i++) {
-            for (int j = i + 1; j < solutions.size(); j++) {
-                total += diversitySelector.symmetricDifference(
-                    solutions.get(i), solutions.get(j));
+        for (int i = 0; i < sols.size(); i++) {
+            for (int j = i + 1; j < sols.size(); j++) {
+                total += divPicker.symDiff(sols.get(i), sols.get(j));
                 pairs++;
             }
         }
-
         return pairs == 0 ? 0 : (double) total / pairs;
     }
 
-    // Count how many structurally distinct instances exist
-    // (by their tuple set fingerprint)
-    private int countDistinctStructures(List<A4Solution> solutions) {
-        Set<String> fingerprints = new HashSet<>();
-
-        for (A4Solution sol : solutions) {
-            fingerprints.add(buildFingerprint(sol));
-        }
-
-        return fingerprints.size();
+    private int countDistinct(List<A4Solution> sols) {
+        Set<String> fps = new HashSet<>();
+        for (A4Solution s : sols) fps.add(fingerprint(s));
+        return fps.size();
     }
 
-    // Build a string fingerprint for a solution
-    private String buildFingerprint(A4Solution solution) {
+    private String fingerprint(A4Solution sol) {
         StringBuilder sb = new StringBuilder();
-
         try {
-            for (Sig sig : solution.getAllReachableSigs()) {
-                if (isBuiltIn(sig)) continue;
-
-                String sigName = sig.label.replace("this/", "");
-                A4TupleSet sigSet = solution.eval(sig);
-                sb.append(sigName).append("=").append(sigSet.size()).append(";");
-
-                for (Field field : sig.getFields()) {
-                    A4TupleSet fieldSet = solution.eval(field);
-                    sb.append(sigName).append(".")
-                      .append(field.label).append("=[");
-
+            for (Sig sig : sol.getAllReachableSigs()) {
+                if (builtIn(sig)) continue;
+                String sn = sig.label.replace("this/", "");
+                A4TupleSet sigSet = sol.eval(sig);
+                sb.append(sn).append("=").append(sigSet.size()).append(";");
+                for (Field f : sig.getFields()) {
+                    A4TupleSet fs = sol.eval(f);
+                    sb.append(sn).append(".").append(f.label).append("=[");
                     List<String> tuples = new ArrayList<>();
-                    for (A4Tuple t : fieldSet) {
+                    for (A4Tuple t : fs) {
                         StringBuilder ts = new StringBuilder();
                         for (int i = 0; i < t.arity(); i++) {
                             if (i > 0) ts.append("->");
-                            // Use atom index not name for structure comparison
-                            ts.append(normalizeAtom(t.atom(i)));
+                            ts.append(normAtom(t.atom(i)));
                         }
                         tuples.add(ts.toString());
                     }
-                    java.util.Collections.sort(tuples);
+                    java.util.Collections.sort(tuples); // canonical order
                     sb.append(String.join(",", tuples)).append("];");
                 }
             }
-        } catch (Exception e) { /* ignore */ }
-
+        } catch (Exception e) { }
         return sb.toString();
     }
 
-    // Normalize atom name to a number for structural comparison
-    // e.g. "Node$0" -> "0", "Node$2" -> "2"
-    private String normalizeAtom(String atom) {
-        if (atom.contains("$")) {
-            return atom.split("\\$")[1];
-        }
+    // "Node$0" -> "0" so isomorphic instances get the same fingerprint
+    private String normAtom(String atom) {
+        if (atom.contains("$")) return atom.split("\\$")[1];
         return atom;
     }
 
-    // Sort solutions by strategy
     private List<A4Solution> getSorted(List<A4Solution> all, String strategy) {
         List<A4Solution> sorted = new ArrayList<>(all);
         sorted.sort((a, b) -> {
-            int scoreA = counter.countUserTuples(a);
-            int scoreB = counter.countUserTuples(b);
-            if (strategy.equals("Minimal"))
-                return Integer.compare(scoreA, scoreB);
-            if (strategy.equals("Maximal"))
-                return Integer.compare(scoreB, scoreA);
+            int sa = counter.countUserTuples(a);
+            int sb = counter.countUserTuples(b);
+            if (strategy.equals("Minimal")) return Integer.compare(sa, sb);
+            if (strategy.equals("Maximal")) return Integer.compare(sb, sa);
             return 0;
         });
         return sorted;
     }
 
-    private boolean isBuiltIn(Sig sig) {
-        String name = sig.label;
-        return name.equals("univ") || name.equals("Int")
-            || name.equals("seq/Int") || name.equals("String")
-            || name.equals("none") || sig.builtin;
+    private boolean builtIn(Sig sig) {
+        String n = sig.label;
+        return n.equals("univ") || n.equals("Int") || n.equals("seq/Int")
+            || n.equals("String") || n.equals("none") || sig.builtin;
     }
 }
